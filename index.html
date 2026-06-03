@@ -1273,10 +1273,27 @@ async function saveSessions(sessions){
 }
 
 async function insertSession(session){
-  const newSession={...session,id:'s-'+Date.now()+'-'+Math.random().toString(36).slice(2)};
-  _sessions.unshift(newSession);
-  localStorage.setItem('mytracker_v3',JSON.stringify(_sessions));
-  return newSession;
+  if(_currentUser&&_currentUser.id!=='local'){
+    // Save to Supabase
+    const row={
+      user_id:_currentUser.id,
+      split:session.split,
+      date:session.date,
+      sats_day:session.satsDay||null,
+      sats_label:session.satsDayLabel||null,
+      exercises:session.exercises
+    };
+    const data=await sbInsert('sessions',row);
+    const newSession={...session,id:data?.id||'s-'+Date.now()};
+    _sessions.unshift(newSession);
+    return newSession;
+  } else {
+    // Fallback to localStorage
+    const newSession={...session,id:'s-'+Date.now()+'-'+Math.random().toString(36).slice(2)};
+    _sessions.unshift(newSession);
+    localStorage.setItem('mytracker_v3',JSON.stringify(_sessions));
+    return newSession;
+  }
 }
 
 async function deleteSessionById(id){
@@ -1291,6 +1308,35 @@ async function deleteAllSessions(){
 
 function getLastSession(split){
   return _sessions.filter(s=>s.split===split).sort((a,b)=>b.date-a.date)[0]||null;
+}
+
+// Migrate localStorage sessions to Supabase (one-time, for existing users)
+async function migrateLocalSessions(){
+  const KEY='mytracker_v3';
+  let local=[];
+  try{local=JSON.parse(localStorage.getItem(KEY))||[];}catch{}
+  if(!local.length)return;
+  if(!_currentUser)return;
+  // Check if already migrated
+  if(localStorage.getItem('mytracker_migrated'))return;
+  // Only migrate non-seed sessions
+  const real=local.filter(s=>!s.seeded);
+  if(!real.length){localStorage.setItem('mytracker_migrated','true');return;}
+  showToast('Migrating your data to cloud…');
+  for(const s of real){
+    try{
+      await sbInsert('sessions',{
+        user_id:_currentUser.id,
+        split:s.split,
+        date:s.date,
+        sats_day:s.satsDay||null,
+        sats_label:s.satsDayLabel||null,
+        exercises:s.exercises
+      });
+    }catch{}
+  }
+  localStorage.setItem('mytracker_migrated','true');
+  showToast('Data migrated! ✓');
 }
 
 function initSeedLocal(){
@@ -2238,8 +2284,12 @@ async function doLogin(){
 }
 
 async function doLogout(){
-  // Auth paused — just go home
-  showScreen('screen-home');
+  try{
+    await fetch(SUPABASE_URL+'/auth/v1/logout',{method:'POST',headers:authHeaders()});
+  }catch{}
+  clearAuthLocally();
+  _currentUser=null;_profile=null;_sessions=[];
+  showScreen('screen-signup');
 }
 
 function toggleDropdown(){
@@ -2612,7 +2662,7 @@ async function finishOnboarding(){
   }
 
   // Save plan to Supabase profile
-  await sbUpdate('profiles',{plan:selectedPlan==='upload'?'beginner':selectedPlan,custom_sessions:customSessions},{id:user.id});
+  if(user.id!=='local') await sbUpdate('profiles',{plan:selectedPlan==='upload'?'beginner':selectedPlan,custom_sessions:customSessions},{id:user.id});
   _profile={..._profile,plan:selectedPlan,custom_sessions:customSessions};
 
   if(selectedPlan==='upload'){
@@ -2984,11 +3034,32 @@ document.addEventListener('visibilitychange',()=>{
 window.addEventListener('load',async()=>{
   applyTheme();
   window.matchMedia('(prefers-color-scheme: light)').addEventListener('change',applyTheme);
-  // AUTH PAUSED — go straight to app with local data
-  _currentUser={id:'local',email:'david.fjallborg1@gmail.com',name:'David'};
-  _profile={plan:'beginner',custom_sessions:[]};
-  initSeedLocal();
-  await enterApp();
+
+  // Try restoring session from localStorage token
+  if(loadAuthLocally()){
+    const ok=await refreshAuthToken();
+    if(ok){
+      try{
+        const r2=await fetch(SUPABASE_URL+'/auth/v1/user',{headers:authHeaders()});
+        const data=await r2.json();
+        if(data?.id){
+          const profiles=await sbSelect('profiles',{id:data.id});
+          const profile=Array.isArray(profiles)?profiles[0]||null:null;
+          _currentUser={id:data.id,email:data.email,name:profile?.name||data.user_metadata?.name||data.email.split('@')[0]};
+          _profile=profile;
+          // Migrate any existing localStorage sessions to Supabase
+          await migrateLocalSessions();
+          await loadSessions();
+          setTimeout(()=>document.getElementById('splash').classList.add('gone'),900);
+          if(!profile?.plan){showScreen('screen-onboarding');}
+          else{await enterApp();}
+          return;
+        }
+      }catch(e){console.error('Session restore error:',e);}
+    }
+    clearAuthLocally();
+  }
+  showScreen('screen-signup');
   setTimeout(()=>document.getElementById('splash').classList.add('gone'),900);
 });
 </script>
