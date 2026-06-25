@@ -2952,6 +2952,47 @@ function pickExName(exId,name){
   }
 }
 
+function showExAC(exId,val){
+  const ac=document.getElementById('ac-'+exId);
+  if(!ac)return;
+  const allNames=[...new Set(getSessions().flatMap(s=>(s.exercises||[]).map(e=>e.name)))].filter(Boolean).sort();
+  const q=(val||'').toLowerCase().trim();
+  const matches=q.length<1?[]:allNames.filter(n=>n.toLowerCase().includes(q)).slice(0,6);
+  if(!matches.length){ac.classList.remove('visible');return;}
+  ac.innerHTML=matches.map(n=>{const safe=n.replace(/'/g,'&apos;');return `<div class="ex-autocomplete-item" onmousedown="pickExAC('${exId}','${safe}')"> ${n}</div>`;}).join('');
+  ac.classList.add('visible');
+}
+function hideExAC(exId){document.getElementById('ac-'+exId)?.classList.remove('visible');}
+function pickExAC(exId,name){
+  const card=document.getElementById(exId);if(!card)return;
+  const inp=card.querySelector('.ex-name-input');
+  if(inp)inp.value=name;
+  hideExAC(exId);
+  // Show last time data for this exercise
+  const sessions=getSessions();
+  for(const s of [...sessions].sort((a,b)=>b.date-a.date)){
+    const ex=(s.exercises||[]).find(e=>e.name.toLowerCase()===name.toLowerCase());
+    if(ex&&ex.mode==='structured'&&ex.sets?.length){
+      const prev=card.querySelector('.prev-block');
+      if(prev){
+        const label=prev.querySelector('.prev-block-label');
+        const body=prev.querySelector('div:not(.prev-block-label)');
+        if(label)label.textContent='Last time';
+        if(body)body.textContent=ex.sets.map(st=>`${st.reps} reps @ ${st.kg}kg`).join(' · ');
+      } else {
+        // Insert prev block
+        const modeToggle=card.querySelector('.mode-toggle');
+        if(modeToggle){
+          const pb=document.createElement('div');
+          pb.className='prev-block';
+          pb.innerHTML=`<div class="prev-block-label">Last time</div><div>${ex.sets.map(st=>`${st.reps} reps @ ${st.kg}kg`).join(' · ')}</div>`;
+          card.insertBefore(pb,modeToggle);
+        }
+      }
+      break;
+    }
+  }
+}
 function setMode(exId,mode,btn){
   const card=document.getElementById(exId);
   card.dataset.mode=mode;
@@ -3039,6 +3080,8 @@ async function saveWorkout(){
     setTimeout(()=>{showScreen('screen-history');renderHistory();},900);
     return;
   }
+  showToast('Saving… 💪');
+  await insertSession(newSession);
   showToast('Workout saved 💪');
   checkAIPlanPrompt();
   if(currentSplit==='other'){
