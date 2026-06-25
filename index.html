@@ -1970,7 +1970,19 @@ function showScreen(id){
   window.scrollTo(0,0);
 }
 function showSplits(){updateSplitLabels();showScreen('screen-splits');}
-function showHistory(){renderHistory();showScreen('screen-history');}
+function showHistory(){
+  showScreen('screen-history');
+  try{
+    renderHistory();
+  }catch(e){
+    const el=document.getElementById('hist-list');
+    if(el)el.innerHTML=`<div style="padding:20px;color:var(--pull);font-size:13px;line-height:1.6">
+      <strong>Error loading history:</strong><br>${e.message}<br><br>
+      <pre style="font-size:11px;color:var(--muted);white-space:pre-wrap">${e.stack?.slice(0,300)||''}</pre>
+    </div>`;
+    console.error('History render error:',e);
+  }
+}
 
 // ─────────────────────────────────────────
 // HOME LABELS + SUMMARY
@@ -3124,7 +3136,7 @@ function renderHistory(){
   }
   el.innerHTML=sessions.map((s,i)=>{
     const d=new Date(s.date).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
-    const exHtml=s.exercises.map(e=>{
+    const exHtml=(s.exercises||[]).map(e=>{
       if(e.mode==='free')return `<div class="hist-free"><strong>${e.name}</strong> — ${(e.freeLines||[]).join(' · ')}</div>`;
       return `<div class="hist-ex"><strong>${e.name}</strong> — ${(e.sets||[]).map(st=>`${st.reps}×${st.kg}kg`).join(', ')}</div>`;
     }).join('');
